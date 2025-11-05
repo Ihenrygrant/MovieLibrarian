@@ -1,0 +1,9 @@
+{
+    "MAKEMKV_PATH": "C:\\Program Files (x86)\\MakeMKV\\makemkvcon.exe",
+    "SAVE_DIR": "E:\\Video",
+    "WAIT_SECONDS": 5,
+    "MIN_LENGTH_SECONDS": 600,
+    "OMDB_API_KEY": "",
+    "OMDB_INTERACTIVE": true,
+    "LOG_FILE": "movie_librarian.log"
+}
