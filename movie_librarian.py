@@ -37,6 +37,7 @@ def default_config():
     return {
         "MAKEMKV_PATH": r"C:\Program Files (x86)\MakeMKV\makemkvcon.exe",
         "SAVE_DIR": r"E:\Video",
+        "TV_SAVE_DIR": r"E:\Video\TV",
         "WAIT_SECONDS": 5,
         "MIN_LENGTH_SECONDS": 600,
         "OMDB_API_KEY": "",
@@ -213,6 +214,9 @@ safe_filename = naming.safe_filename
 clean_title_string = naming.clean_title_string
 is_hardware_label = naming.is_hardware_label
 
+# TV save directory (separate location from movie SAVE_DIR)
+TV_SAVE_DIR = CONFIG.get("TV_SAVE_DIR") or (os.path.join(SAVE_DIR, "TV") if SAVE_DIR else "")
+
 def choose_title(first, raw_label, titles, interactive=OMDB_INTERACTIVE):
     """
     Wrapper that accepts either:
@@ -248,7 +252,10 @@ from lib.ripper import rip_longest_titles
 
 # === Main program ===
 
-def main():
+def main(mode: str = "movie"):
+    """
+    Main polling loop. mode: "movie" or "tv" - affects which ripper is used.
+    """
     logger.info("=== Starting movie librarian ===")
     print("Welcome to the Movie Librarian!")
 
@@ -293,12 +300,48 @@ def main():
 
             for d in drives:
                 try:
-                    # ...existing per-drive handling ...
-                    rip_count, folder_name = rip_longest_titles(d)
-                    # ...any post-rip bookkeeping...
+                    drive_letter = d.get("letter")
+                    label = (d.get("label") or "").strip()
+                    logger.debug("found drive %s label=%r index=%s", drive_letter, label, d.get("index"))
+                    prev_label = last_seen_labels.get(drive_letter, "")
+                    prev_hash = last_seen_hashes.get(drive_letter, "")
+
+                    # Process this drive via configured DRIVE_PROCESSOR (set by CLI).
+                    # If not present, fall back to legacy ripper/movie flows for compatibility.
+                    processor = globals().get("DRIVE_PROCESSOR")
+                    if processor is not None:
+                        ok, result = processor(d)
+                    else:
+                        # Legacy fallback: try rip_longest_titles if available, else movie_ripper
+                        try:
+                            from lib.ripper import rip_longest_titles as _legacy_ripper
+                        except Exception:
+                            _legacy_ripper = None
+                        if _legacy_ripper:
+                            # legacy rip_longest_titles returned (rip_count, folder_name)
+                            rip_count, folder_name = _legacy_ripper(d)
+                            ok, result = True, {"folder": folder_name}
+                        else:
+                            from lib.movie_ripper import rip_movie_from_drive as _mr
+                            ok, folder = _mr(d, globals().get("OMDB_API_KEY", ""), interactive=globals().get("OMDB_INTERACTIVE", True))
+                            result = {"folder": folder}
+
+                    # normalize returned result to folder_name for logging / later use
+                    folder_name = None
+                    if isinstance(result, dict):
+                        folder_name = result.get("folder")
+                        # manifest fragment -> if contains final_folder, prefer it
+                        if not folder_name:
+                            mf = result.get("manifest_fragment") or {}
+                            folder_name = mf.get("final_folder") or mf.get("ripped_files") or folder_name
+                    else:
+                        folder_name = str(result)
+
+                    logger.debug("parsed titles for disc %s: %r (folder=%r)", drive_index, parsed_titles, folder_name)
+ 
+                    # ...existing code continues...
                 except Exception:
                     logger.exception("error processing drive %s", d)
-                    # continue to next drive rather than exit
                     continue
 
             # main loop delay between scans
@@ -309,56 +352,46 @@ def main():
     except Exception:
         logger.exception("unexpected error in main loop")
 
+def _get_drive_processor(mode: str, omdb_api_key: str, interactive: bool):
+    """
+    Return a callable processor(drive) -> (success_flag, result) for the chosen mode.
+    Keeps imports lazy to avoid startup side-effects.
+    """
+    if mode == "tv":
+        from lib import tv_ripper
+        # provide configured TV_SAVE_DIR to tv_ripper module (no API change)
+        try:
+            tv_ripper.TV_SAVE_DIR = globals().get("TV_SAVE_DIR", "")
+        except Exception:
+            pass
+        def _proc(drive):
+            # ensure we create/find a set and rip the disc into it
+            set_id = tv_ripper.find_or_create_set(drive)
+            success, manifest_fragment = tv_ripper.rip_disc_into_set(set_id, drive)
+            return success, {"set_id": set_id, "manifest_fragment": manifest_fragment}
+        return _proc
+
+    # default: movie mode
+    from lib.movie_ripper import rip_movie_from_drive
+    def _proc(drive):
+        ok, folder = rip_movie_from_drive(drive, omdb_api_key, interactive=interactive)
+        return ok, {"folder": folder}
+    return _proc
+
 if __name__ == "__main__":
     import argparse
-    import getpass
-
-    parser = argparse.ArgumentParser(prog="movie_librarian", description="Movie Librarian utility")
-    parser.add_argument("--set-omdb-key", nargs="?", const=True,
-                        help="Store OMDb API key. Use no value to be prompted, or pass the key directly.")
-    parser.add_argument("--show-config", action="store_true", help="Print resolved configuration and exit.")
+    parser = argparse.ArgumentParser(description="Movie/TV librarian")
+    parser.add_argument("--mode", choices=("movie", "tv"), default="movie", help="Run in movie or tv mode")
+    parser.add_argument("--non-interactive", dest="interactive", action="store_false", help="Disable interactive prompts")
     args = parser.parse_args()
 
-    if args.show_config:
-        # print effective config (do not print raw key from keyring)
-        cfg_copy = dict(CONFIG)
-        if keyring:
-            try:
-                kr = keyring.get_password("MovieLibrarian", "omdb_api_key")
-                cfg_copy["OMDB_API_KEY"] = "<stored in keyring>" if kr else cfg_copy.get("OMDB_API_KEY", "")
-            except Exception:
-                pass
-        else:
-            cfg_copy["OMDB_API_KEY"] = "<from config file>" if cfg_copy.get("OMDB_API_KEY") else ""
-        print(json.dumps(cfg_copy, indent=2))
-        sys.exit(0)
-
-    if args.set_omdb_key is not None:
-        if args.set_omdb_key is True:
-            key_val = getpass.getpass("Enter OMDb API key (input hidden): ").strip()
-        else:
-            key_val = str(args.set_omdb_key).strip()
-
-        if not key_val:
-            print("No key provided, aborting.")
-            sys.exit(1)
-
-        # prefer keyring
-        if keyring:
-            try:
-                keyring.set_password("MovieLibrarian", "omdb_api_key", key_val)
-                print("OMDb API key saved to OS keyring (MovieLibrarian / omdb_api_key).")
-                sys.exit(0)
-            except Exception as e:
-                print(f"Warning: keyring save failed: {e} — falling back to config file.")
-
-        # fallback: write to user's config.toml
-        cfg_path = get_config_dir() / "config.toml"
-        current = _read_toml(cfg_path) or default_config()
-        current["OMDB_API_KEY"] = key_val
-        _write_toml(cfg_path, current)
-        print(f"OMDb API key written to {cfg_path}")
-        sys.exit(0)
-
-    # no CLI action — run main loop
-    main()
+    # call the existing main loop function but provide the mode and a drive processor
+    try:
+        # if your existing main() accepts parameters adapt this call; otherwise main() will read globals
+        DRIVE_PROCESSOR = _get_drive_processor(args.mode, globals().get("OMDB_API_KEY", ""), args.interactive)
+        # inject DRIVE_PROCESSOR into module globals so the existing loop can call it
+        globals()["DRIVE_PROCESSOR"] = DRIVE_PROCESSOR
+        # call the pre-existing main() entry (keeps original behavior)
+        main(mode=args.mode)
+    except Exception:
+        logger.exception("fatal error in startup")

@@ -82,3 +82,51 @@ Development / Maintenance
 
 License & Contribution
 - Add your project's license and contribution guidelines as appropriate.
+
+## Configuration / configurable values
+
+The app reads configuration from config.toml (or env vars); defaults are provided by the program.
+
+- MAKEMKV_PATH
+  - Path to makemkvcon executable (default: C:\Program Files (x86)\MakeMKV\makemkvcon.exe)
+  - Env override: MOVIE_LIBRARIAN_MAKEMKV_PATH
+
+- SAVE_DIR
+  - Base folder for movie rips (default: E:\Video)
+  - Env override: MOVIE_LIBRARIAN_SAVE_DIR
+
+- TV_SAVE_DIR
+  - Base folder for TV rips (default: E:\Video\TV)
+  - If not set, defaults to SAVE_DIR\TV
+
+- WAIT_SECONDS
+  - Poll loop delay between scans (seconds). Default: 5
+  - Env override: MOVIE_LIBRARIAN_WAIT_SECONDS
+
+- MIN_LENGTH_SECONDS
+  - Minimum title length to consider a title (seconds). Default: 600
+
+- OMDB_API_KEY
+  - OMDb API key (string). Prefer storing with keyring in production.
+  - Env override: MOVIE_LIBRARIAN_OMDB_API_KEY or OMDB_API_KEY
+
+- OMDB_INTERACTIVE
+  - Whether to prompt user for low-confidence suggestions (true/false). Default: true
+  - Env override: MOVIE_LIBRARIAN_OMDB_INTERACTIVE
+
+- LOG_FILE
+  - Path/name of the log file (default: movie_librarian.log in code dir)
+
+CLI flags:
+- --mode {movie,tv}  — run in movie or tv mode (default: movie)
+- --non-interactive   — disable user prompts
+
+Config location:
+- Default per-user config directory (Windows => %APPDATA%\MovieLibrarian\config.toml)
+- Override with MOVIE_LIBRARIAN_CONFIG_DIR
+
+## TV / Multi-disc notes
+
+- TV rips use TV_SAVE_DIR by default; manifests are stored in `manifests/`.
+- Multi-disc sets are grouped into a persistent manifest so you can stop/restart between discs.
+- Episode-to-file mapping requires a metadata source (TMDb/TVDB) for per-episode data; OMDb is used as a fallback for simple titles.
